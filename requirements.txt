@@ -1,0 +1,55 @@
+# requirements.txt - GENESIS v3.0 Pepper Brain
+
+# Core Functionality & Settings
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# Async I/O
+aiohttp>=3.9.0,<4.0.0
+aiofiles>=23.2.0,<24.0.0
+aiocache>=0.12.0,<0.13.0
+
+# Task Scheduling
+schedule>=1.2.0,<1.3.0
+
+# NLP & Text Processing
+spacy>=3.7.0,<3.8.0
+# Download model: python -m spacy download en_core_web_sm
+dateparser>=1.2.0,<1.3.0
+
+# AI Models & Services
+google-generativeai>=0.8.0,<1.0.0  # Gemini API
+vaderSentiment>=3.3.0,<3.4.0       # Sentiment analysis
+
+# Database
+# SQLite is included in Python standard library
+
+# --- NAOqi/Pepper Dependencies ---
+# NOTE: These must be installed separately from Aldebaran/SoftBank SDK
+# Typically installed as:
+#   - pynaoqi (Python 2.7 bindings - may need special handling)
+#   - qi framework (for Python 3.x, if available)
+# Installation instructions at: 
+#   http://doc.aldebaran.com/2-5/dev/python/install_guide.html
+# 
+# For mock/testing mode, these are optional
+
+# --- Development & Testing ---
+pytest>=7.4.0,<9.0.0
+pytest-asyncio>=0.21.0,<0.24.0
+pytest-cov>=4.1.0,<6.0.0
+pytest-mock>=3.12.0,<4.0.0
+
+# Code Quality
+flake8>=6.1.0,<8.0.0
+black>=23.0.0,<25.0.0
+mypy>=1.5.0,<1.12.0
+pylint>=3.0.0,<4.0.0
+
+# Type Stubs
+types-aiofiles>=23.2.0
+types-dateparser>=1.1.0
+
+# Logging & Monitoring (optional)
+colorlog>=6.7.0,<7.0.0  # Colored console output
