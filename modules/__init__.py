@@ -1,23 +1,16 @@
 # modules/__init__.py
-
-# Explicitly import all top-level modules so Python recognizes them immediately
-from . import database
-from . import nlp_processor
-from . import reminder
-from . import response_formatter
-from . import sentiment
-from . import task_manager
-from . import time_func
-from . import confirmation
-
-# Also import the new modules
-from . import pepper_interface
-from . import external_ai
-from . import decision_engine
-
-# You can optionally list sub-packages here too, although they should be auto-discovered
-from . import dialogue
-from . import personalities
+from .database import Database
+from .task_manager import TaskManager
+from .nlp_processor import NLPProcessor
+from .reminder import ReminderService
+from .response_formatter import format_error_message
+from .sentiment import Sentiment
+from .time_func import TimeFunctionality
+from .confirmation import generate_confirmation
+from .pepper_interface import PepperInterface
+from .external_ai import ExternalAI
+from .decision_engine import DecisionEngine
+# The empty sub-folders will have their own __init__.py files
 
 __all__ = [
     "database", "nlp_processor", "reminder", "response_formatter", "sentiment", 

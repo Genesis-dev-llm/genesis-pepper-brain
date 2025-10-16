@@ -44,21 +44,24 @@ To switch to Redis, configure the 'default' alias for aiocache globally at appli
 
 from aiocache import cached, Cache
 from aiocache.serializers import PickleSerializer
+from typing import Callable, Any
 from core.logger import logger
 
-# The decorator function.
-# It uses the 'default' cache alias which aiocache manages.
-# By default, if not configured, aiocache's 'default' is SimpleMemoryCache.
-# If you call `caches.set_config` as shown in the docstring example above
-# before this module is imported or before the first @cache is applied,
-# it will use that configuration (e.g., Redis).
-cache = lambda ttl: cached(
-    ttl=ttl,
-    # cache=Cache.MEMORY, # Explicitly Memory if you don't want to rely on global default
-    # serializer=PickleSerializer(), # Default is already PickleSerializer
-    alias="default", # Uses the 'default' cache configuration from aiocache
-    # namespace="genesis_cache", # Namespace is good if 'default' Redis is shared
-)
+def cache(ttl: int) -> Callable[..., Any]:
+    """
+    Async caching decorator with a specified Time-To-Live (TTL) in seconds.
+
+    This uses the 'default' cache alias managed by aiocache. By default, this
+    is an in-memory cache. It can be configured to use Redis or another backend
+    at application startup by using `aiocache.caches.set_config`.
+
+    Args:
+        ttl: The number of seconds the cache entry should live.
+
+    Returns:
+        A decorator that can be applied to an async function.
+    """
+    return cached(ttl=ttl, alias="default")
 
 logger.info(f"Async caching (aiocache) decorator initialized. It will use the 'default' aiocache alias.")
 

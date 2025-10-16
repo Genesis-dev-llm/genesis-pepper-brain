@@ -18,15 +18,18 @@ from datetime import datetime, timezone
 # Core GENESIS imports
 from core.settings import settings
 from core.logger import logger 
-from modules.database import Database
-from modules.task_manager import TaskManager
-from utils.memory_manager import MemoryManager
-from modules.nlp_processor import NLPProcessor
-from utils.module_loader import load_modules_facade
-from modules.dialogue.dialogue_manager import DialogueManager
 from core.plugin_loader import load_plugins
 from core.plugin_interface import Plugin
+
+# --- MODULE/UTIL IMPORTS (Explicity list each needed component) ---
+# NOTE: This list relies on the path fix to find 'modules' and 'utils' folders.
+from modules.database import Database
+from modules.task_manager import TaskManager
+from modules.nlp_processor import NLPProcessor
+from modules.dialogue.dialogue_manager import DialogueManager
 from modules.pepper_interface import PepperInterface 
+from utils.memory_manager import MemoryManager
+from utils.module_loader import load_modules_facade 
 
 # --- Global Component Instances ---
 db: Optional[Database] = None
@@ -62,7 +65,10 @@ async def initialize_core_components(app_loop: Optional[asyncio.AbstractEventLoo
         memory_mgr = MemoryManager() 
         nlp_proc = NLPProcessor() 
         
-        if not nlp_proc.nlp:
+        # This check is valid, but Pylance warns nlp_proc could be None.
+        # Let's add an assertion to satisfy the type checker.
+        assert nlp_proc is not None
+        if not nlp_proc.nlp: # Now Pylance knows nlp_proc is not None here.
             logger.critical("NLP model (spaCy) failed to load. Core NLP functionality will be impaired.")
 
         task_mgr = TaskManager()
@@ -102,8 +108,13 @@ async def initialize_core_components(app_loop: Optional[asyncio.AbstractEventLoo
             pepper_interface_instance=pepper_interface 
         )
         
+        # Add assertions to assure the type checker these are not None
+        assert nlp_proc is not None
+        assert memory_mgr is not None
+        assert app_modules_facade is not None
+        assert pepper_interface is not None
         # Initialize DialogueManager (which creates DecisionEngine internally)
-        dialogue_mgr_instance = DialogueManager(
+        dialogue_mgr_instance = await DialogueManager.create(
             nlp_processor=nlp_proc, 
             memory_manager=memory_mgr,
             modules_facade=app_modules_facade, 
@@ -132,8 +143,19 @@ async def initialize_core_components(app_loop: Optional[asyncio.AbstractEventLoo
                     )
         
         # 3. Register DialogueManager as the primary sensor callback handler
+        # The callback must be a sync function that schedules the async handler.
+        assert dialogue_mgr_instance is not None
+        
+        def sensor_callback_wrapper(sensor_data: Dict[str, Any]) -> None:
+            """
+            Synchronous wrapper to schedule the async callback handler on the event loop.
+            This is required because the underlying library expects a sync callback.
+            """
+            if dialogue_mgr_instance:
+                asyncio.create_task(dialogue_mgr_instance.handle_sensor_callback(sensor_data))
+
         await pepper_interface.subscribe_to_all_sensors(
-            dialogue_mgr_instance.handle_sensor_callback
+            sensor_callback_wrapper
         )
         
         logger.info("--- GENESIS Core Components Initialized Successfully ---")
@@ -195,8 +217,18 @@ async def pepper_middleware_loop():
                     if reconnect_success:
                         logger.info("Reconnected to Pepper successfully.")
                         # Re-subscribe to sensors
+                        # The callback must be a sync function that schedules the async handler.
+                        assert dialogue_mgr_instance is not None
+                        
+                        def sensor_callback_wrapper(sensor_data: Dict[str, Any]) -> None:
+                            """
+                            Synchronous wrapper to schedule the async callback handler on the event loop.
+                            """
+                            if dialogue_mgr_instance:
+                                asyncio.create_task(dialogue_mgr_instance.handle_sensor_callback(sensor_data))
+
                         await pepper_interface.subscribe_to_all_sensors(
-                            dialogue_mgr_instance.handle_sensor_callback
+                            sensor_callback_wrapper
                         )
                     else:
                         logger.error("Reconnection failed. Will retry...")

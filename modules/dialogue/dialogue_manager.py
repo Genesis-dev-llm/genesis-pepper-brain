@@ -1,31 +1,32 @@
 # modules/dialogue/dialogue_manager.py
 import asyncio
 import os
+import aiofiles
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, Any, Optional, Callable, Coroutine, Union
 
-from core.logger import logger
-from core.settings import settings
-from modules.external_ai import ExternalAI
-from modules.dialogue.gemini_adapter import stylize_with_gemini
-from modules.utils.personality_loader import load_personalities
-from modules.nlp_processor import ( 
+from ...core.logger import logger
+from ...core.settings import settings
+from .gemini_adapter import stylize_with_gemini
+from ..utils.personality_loader import load_personalities
+from ..utils.cache import cache
+from ..nlp_processor import ( 
     INTENT_SET_REMINDER, INTENT_TELL_TIME, INTENT_TELL_DATE, 
-    INTENT_CHANGE_PERSONALITY, INTENT_CHANGE_TONE,
-    INTENT_UNKNOWN, INTENT_GENERAL_QUERY
+    INTENT_CHANGE_PERSONALITY, INTENT_CHANGE_TONE, INTENT_UNKNOWN
 )
-from modules.response_formatter import format_error_message 
+from ..response_formatter import format_error_message 
 
 if TYPE_CHECKING:
-    from modules.nlp_processor import NLPProcessor
-    from utils.memory_manager import MemoryManager
+    from ..nlp_processor import NLPProcessor
+    from ..utils.memory_manager import MemoryManager
     from types import SimpleNamespace
-    from core.plugin_interface import Plugin
-    from modules.personalities.profile import PersonaProfile
-    from modules.pepper_interface import PepperInterface
-    from modules.decision_engine import DecisionEngine
+    from ...core.plugin_interface import Plugin
+    from ..personalities.profile import PersonaProfile
+    from ..pepper_interface import PepperInterface
+    from ..decision_engine import DecisionEngine
 
 class DialogueManager:
+    # Private constructor. Use DialogueManager.create() instead.
     def __init__(
         self, 
         nlp_processor: 'NLPProcessor', 
@@ -45,17 +46,6 @@ class DialogueManager:
         self.personalities: Dict[str, 'PersonaProfile'] = {}
         self.current_persona: Optional['PersonaProfile'] = None
         self.current_tone: Optional[str] = None
-        
-        self._load_and_set_initial_persona()
-
-        # Initialize DecisionEngine after DM is set up to break circular dependency
-        from modules.decision_engine import DecisionEngine 
-        self.decision_engine = DecisionEngine(
-            pepper_interface=self.pepper_interface,
-            nlp_processor=self.nlp_processor,
-            modules_facade=self.modules_facade,
-            dialogue_manager=self
-        )
 
         # Intent dispatch table (ONLY for internal, simple actions or state changes)
         self.intent_handlers: Dict[str, Callable[[Dict[str, Any], str], Coroutine[Any, Any, str]]] = {
@@ -65,9 +55,33 @@ class DialogueManager:
             INTENT_CHANGE_PERSONALITY: self._handle_change_personality, 
             INTENT_CHANGE_TONE: self._handle_change_tone,
         }
-        logger.info(f"DialogueManager initialized. Initial Persona: {self.current_persona.name if self.current_persona else 'None'}. DecisionEngine ready.")
+        # DecisionEngine will be set by the factory method
+        self.decision_engine: Optional['DecisionEngine'] = None
 
-    def _load_and_set_initial_persona(self):
+    @classmethod
+    async def create(cls, *args, **kwargs) -> 'DialogueManager':
+        """
+        Asynchronous factory for creating and initializing a DialogueManager instance.
+        This pattern allows for async operations during setup and cleanly resolves
+        the circular dependency with DecisionEngine.
+        """
+        dm_instance = cls(*args, **kwargs)
+        await dm_instance._load_and_set_initial_persona()
+
+        # Initialize DecisionEngine and link it back to the DialogueManager instance
+        from ..decision_engine import DecisionEngine
+        decision_engine = DecisionEngine(
+            pepper_interface=dm_instance.pepper_interface,
+            nlp_processor=dm_instance.nlp_processor,
+            modules_facade=dm_instance.modules_facade,
+            dialogue_manager=dm_instance
+        )
+        dm_instance.decision_engine = decision_engine
+
+        logger.info(f"DialogueManager initialized. Initial Persona: {dm_instance.current_persona.name if dm_instance.current_persona else 'None'}. DecisionEngine ready.")
+        return dm_instance
+
+    async def _load_and_set_initial_persona(self):
         """Load personality profiles and set initial persona"""
         loaded_persona_ns = load_personalities()
         self.personalities = {
@@ -88,18 +102,24 @@ class DialogueManager:
         else:
             logger.warning("No personas loaded. Using default configuration.")
 
-    def log_interaction(self, user_input: str, genesis_response: str):
+    async def log_interaction(self, user_input: str, genesis_response: str):
         """Log user interaction to file"""
+        log_path = ""
         try:
             ts = datetime.now(timezone.utc).isoformat()
-            log_path = settings.get_interactions_log_path()
+            log_path = await self._get_cached_log_path()
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(f"{ts} | User: {user_input}\n")
-                f.write(f"{ts} | GENESIS: {genesis_response}\n\n")
+            async with aiofiles.open(log_path, "a", encoding="utf-8") as f:
+                await f.write(f"{ts} | User: {user_input}\n")
+                await f.write(f"{ts} | GENESIS: {genesis_response}\n\n")
         except Exception as e:
             logger.error(f"Error logging interaction to file '{log_path}': {e}", exc_info=False)
+
+    @cache(ttl=600) # Cache for 10 minutes
+    async def _get_cached_log_path(self) -> str:
+        """Cached lookup for the interactions log path."""
+        return settings.get_interactions_log_path()
 
     async def handle_sensor_callback(self, sensor_data: Dict[str, Any]) -> None:
         """
@@ -111,17 +131,21 @@ class DialogueManager:
         
         logger.info(f"DM received sensor event: {event_name}", extra={"value_snippet": str(event_value)[:50]})
         
-        if event_name == "WordRecognized":
-            # Extract recognized text from event value
+        if event_name == "WordRecognized" and self.decision_engine:
+            user_text = ""
             if isinstance(event_value, list) and len(event_value) > 0:
-                user_text = str(event_value[0])
-            else:
+                # Standard event format: ["text", confidence_score]
+                user_text = str(event_value[0]).strip()
+            elif isinstance(event_value, str):
+                # Handle if the value is just a raw string
                 user_text = str(event_value)
             
-            if user_text and user_text.strip():
+            if user_text:
                 # Delegate speech processing to the Decision Engine
                 asyncio.create_task(self.decision_engine.process_user_speech(user_text))
-        
+            else:
+                logger.warning(f"WordRecognized event received with no usable text. Value: {event_value}")
+
         elif event_name == "ALMemory/Touched":
             # Example: Robot head touched
             if isinstance(event_value, list) and len(event_value) >= 2:
@@ -195,12 +219,14 @@ class DialogueManager:
         new_persona_name_key = entities.get("persona_name", "").lower()
         if new_persona_name_key in self.personalities:
             self.current_persona = self.personalities[new_persona_name_key]
-            self.current_tone = self.current_persona.tone
-            logger.info(f"Personality changed to: {self.current_persona.name}")
-            return f"Okay, I've switched my personality to {self.current_persona.name}."
+            if self.current_persona:
+                self.current_tone = self.current_persona.tone
+                logger.info(f"Personality changed to: {self.current_persona.name}")
+                return f"Okay, I've switched my personality to {self.current_persona.name}."
+            return "Something went wrong while changing my personality."
         else:
             available_personas = ", ".join([p.name for p in self.personalities.values()])
-            return f"Sorry, I don't have a personality named '{entities.get('persona_name')}'. Available: {available_personas}."
+            return f"Sorry, I don't have a personality named '{new_persona_name_key}'. Available: {available_personas}."
 
     async def _handle_change_tone(self, entities: Dict[str, Any], raw_command: str) -> str:
         """Change the current tone"""
